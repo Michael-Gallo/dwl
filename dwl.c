@@ -179,10 +179,9 @@ struct Monitor {
 	struct wlr_scene_rect *fullscreen_bg; /* See createmon() for info */
 	struct wl_listener frame;
 	struct wl_listener destroy;
-	struct wl_listener destroy_lock_surface;
-	struct wlr_session_lock_surface_v1 *lock_surface;
-	struct wlr_box m; /* monitor area, layout-relative */
-	struct wlr_box w; /* window area, layout-relative */
+	struct wl_listener request_state;
+	struct wlr_box m;      /* monitor area, layout-relative */
+	struct wlr_box w;      /* window area, layout-relative */
 	struct wl_list layers[4]; /* LayerSurface::link */
 	const Layout *lt[2];
 	unsigned int seltags;
@@ -286,7 +285,8 @@ static void printstatus(void);
 static void quit(const Arg *arg);
 static void rendermon(struct wl_listener *listener, void *data);
 static void requeststartdrag(struct wl_listener *listener, void *data);
-static void resize(Client *c, struct wlr_box geo, int interact, int draw_borders);
+static void requestmonstate(struct wl_listener *listener, void *data);
+static void resize(Client *c, struct wlr_box geo, int interact);
 static void run(char *startup_cmd);
 static void setcursor(struct wl_listener *listener, void *data);
 static void setfloating(Client *c, int floating);
@@ -933,6 +933,7 @@ createmon(struct wl_listener *listener, void *data)
 	/* Set up event listeners */
 	LISTEN(&wlr_output->events.frame, &m->frame, rendermon);
 	LISTEN(&wlr_output->events.destroy, &m->destroy, cleanupmon);
+	LISTEN(&wlr_output->events.request_state, &m->request_state, requestmonstate);
 
 	wlr_output_enable(wlr_output, 1);
 	if (!wlr_output_commit(wlr_output))
@@ -1925,7 +1926,14 @@ requeststartdrag(struct wl_listener *listener, void *data)
 }
 
 void
-resize(Client *c, struct wlr_box geo, int interact, int draw_borders)
+requestmonstate(struct wl_listener *listener, void *data)
+{
+	struct wlr_output_event_request_state *event = data;
+	wlr_output_commit_state(event->output, event->state);
+}
+
+void
+resize(Client *c, struct wlr_box geo, int interact)
 {
 	struct wlr_box *bbox = interact ? &sgeom : &c->mon->w;
 	client_set_bounds(c, geo.width, geo.height);
