@@ -1074,8 +1074,6 @@ cursorframe(struct wl_listener *listener, void *data)
 void
 destroydragicon(struct wl_listener *listener, void *data)
 {
-	struct wlr_drag_icon *icon = data;
-	wlr_scene_node_destroy(icon->data);
 	/* Focus enter isn't sent during drag, so refocus the focused node. */
 	focusclient(focustop(selmon), 1);
 	motionnotify(0);
@@ -2340,7 +2338,8 @@ startdrag(struct wl_listener *listener, void *data)
 	if (!drag->icon)
 		return;
 
-	drag->icon->data = &wlr_scene_subsurface_tree_create(drag_icon, drag->icon->surface)->node;
+	drag->icon->data = wlr_scene_drag_icon_create(layers[LyrDragIcon], drag->icon);
+	motionnotify(0);
 	wl_signal_add(&drag->icon->events.destroy, &drag_icon_destroy);
 }
 
