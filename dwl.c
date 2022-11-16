@@ -335,6 +335,7 @@ static const int layermap[] = { LyrBg, LyrBottom, LyrTop, LyrOverlay };
 static struct wlr_renderer *drw;
 static struct wlr_allocator *alloc;
 static struct wlr_compositor *compositor;
+static struct wlr_session *session;
 
 static struct wlr_xdg_shell *xdg_shell;
 static struct wlr_xdg_activation_v1 *activation;
@@ -627,7 +628,8 @@ buttonpress(struct wl_listener *listener, void *data)
 void
 chvt(const Arg *arg)
 {
-	wlr_session_change_vt(wlr_backend_get_session(backend), arg->ui);
+	if (session)
+		wlr_session_change_vt(session, arg->ui);
 }
 
 void
@@ -2160,7 +2162,7 @@ setup(void)
 	 * backend uses the renderer, for example, to fall back to software cursors
 	 * if the backend does not support hardware cursors (some older GPUs
 	 * don't). */
-	if (!(backend = wlr_backend_autocreate(dpy)))
+	if (!(backend = wlr_backend_autocreate(dpy, &session)))
 		die("couldn't create backend");
 
 	/* Initialize the scene graph used to lay out windows */
