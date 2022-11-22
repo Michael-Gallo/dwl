@@ -74,7 +74,7 @@
 /* enums */
 enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
 enum { XDGShell, LayerShell, X11Managed, X11Unmanaged }; /* client types */
-enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrFS, LyrTop, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
+enum { LyrBg, LyrBottom, LyrTop, LyrOverlay, LyrTile, LyrFloat, LyrFS, LyrDragIcon, NUM_LAYERS }; /* scene layers */
 #ifdef XWAYLAND
 enum { NetWMWindowTypeDialog, NetWMWindowTypeSplash, NetWMWindowTypeToolbar,
 	NetWMWindowTypeUtility, NetLast }; /* EWMH atoms */
@@ -480,12 +480,7 @@ arrange(Monitor *m)
 		if (c->mon == m)
 			wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, m));
 
-	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
-			(c = focustop(m)) && c->isfullscreen);
-
-	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
-
-	if (m->lt[m->sellt]->arrange)
+	if (m && m->lt[m->sellt]->arrange)
 		m->lt[m->sellt]->arrange(m);
 	motionnotify(0);
 	checkidleinhibitor(NULL);
@@ -635,13 +630,16 @@ chvt(const Arg *arg)
 void
 checkidleinhibitor(struct wlr_surface *exclude)
 {
-	int inhibited = 0, unused_lx, unused_ly;
+	int inhibited = 0;
 	struct wlr_idle_inhibitor_v1 *inhibitor;
 	wl_list_for_each(inhibitor, &idle_inhibit_mgr->inhibitors, link) {
-		struct wlr_surface *surface = wlr_surface_get_root_surface(inhibitor->surface);
-		struct wlr_scene_tree *tree = surface->data;
-		if (exclude != surface && (bypass_surface_visibility || (!tree
-				|| wlr_scene_node_coords(&tree->node, &unused_lx, &unused_ly)))) {
+		Client *c;
+		if (exclude == inhibitor->surface)
+			continue;
+		/* In case we can't get a client from the surface assume that it is
+		 * visible, for example a layer surface */
+		if (!(c = client_from_wlr_surface(inhibitor->surface))
+				|| VISIBLEON(c, c->mon)) {
 			inhibited = 1;
 			break;
 		}
@@ -857,7 +855,8 @@ createlayersurface(struct wl_listener *listener, void *data)
 
 	layersurface->scene_layer = wlr_scene_layer_surface_v1_create(l, wlr_layer_surface);
 	layersurface->scene = layersurface->scene_layer->tree;
-	layersurface->popups = wlr_layer_surface->surface->data = wlr_scene_tree_create(l);
+	layersurface->popups = wlr_layer_surface->surface->data =
+			&wlr_scene_tree_create(layers[wlr_layer_surface->pending.layer])->node;
 
 	layersurface->scene->node.data = layersurface;
 
@@ -1286,8 +1285,8 @@ void
 focusstack(const Arg *arg)
 {
 	/* Focus the next or previous client (in tiling order) on selmon */
-	Client *c, *sel = focustop(selmon);
-	if (!sel || sel->isfullscreen)
+	Client *c, *sel = selclient();
+	if (!sel || (sel->isfullscreen && lockfullscreen))
 		return;
 	if (arg->i > 0) {
 		wl_list_for_each(c, &sel->link, link) {
@@ -2050,16 +2049,32 @@ setfullscreen(Client *c, int fullscreen)
 		return;
 	c->bw = fullscreen ? 0 : borderpx;
 	client_set_fullscreen(c, fullscreen);
-	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen
-			? LyrFS : c->isfloating ? LyrFloat : LyrTile]);
 
 	if (fullscreen) {
 		c->prev = c->geom;
-		resize(c, c->mon->m, 0, 0);
+		resize(c, c->mon->m, 0);
+		/* The xdg-protocol specifies:
+		 *
+		 * If the fullscreened surface is not opaque, the compositor must make
+		 * sure that other screen content not part of the same surface tree (made
+		 * up of subsurfaces, popups or similarly coupled surfaces) are not
+		 * visible below the fullscreened surface.
+		 *
+		 * For brevity we set a black background for all clients
+		 */
+		if (!c->fullscreen_bg) {
+			c->fullscreen_bg = wlr_scene_rect_create(c->scene,
+				c->geom.width, c->geom.height, fullscreen_bg);
+			wlr_scene_node_lower_to_bottom(&c->fullscreen_bg->node);
+		}
 	} else {
 		/* restore previous size instead of arrange for floating windows since
 		 * client positions are set by the user and cannot be recalculated */
-		resize(c, c->prev, 0, 1);
+		resize(c, c->prev, 0);
+		if (c->fullscreen_bg) {
+			wlr_scene_node_destroy(&c->fullscreen_bg->node);
+			c->fullscreen_bg = NULL;
+		}
 	}
 	arrange(c->mon);
 	printstatus();
@@ -2174,10 +2189,13 @@ setup(void)
 
 	/* Initialize the scene graph used to lay out windows */
 	scene = wlr_scene_create();
-	for (i = 0; i < NUM_LAYERS; i++)
-		layers[i] = wlr_scene_tree_create(&scene->tree);
-	drag_icon = wlr_scene_tree_create(&scene->tree);
-	wlr_scene_node_place_below(&drag_icon->node, &layers[LyrBlock]->node);
+	layers[LyrBg] = wlr_scene_tree_create(&scene->tree);
+	layers[LyrBottom] = wlr_scene_tree_create(&scene->tree);
+	layers[LyrTile] = wlr_scene_tree_create(&scene->tree);
+	layers[LyrFloat] = wlr_scene_tree_create(&scene->tree);
+	layers[LyrTop] = wlr_scene_tree_create(&scene->tree);
+	layers[LyrOverlay] = wlr_scene_tree_create(&scene->tree);
+	layers[LyrDragIcon] = wlr_scene_tree_create(&scene->tree);
 
 	/* Create a renderer with the default implementation */
 	if (!(drw = wlr_renderer_autocreate(backend)))
@@ -2344,6 +2362,10 @@ void
 startdrag(struct wl_listener *listener, void *data)
 {
 	struct wlr_drag *drag = data;
+	/* During drag the focus isn't sent to clients, this causes that
+	 * we don't update border color acording the pointer coordinates */
+	focusclient(NULL, 0);
+
 	if (!drag->icon)
 		return;
 
@@ -2575,6 +2597,9 @@ updatemons(struct wl_listener *listener, void *data)
 		/* Don't move clients to the left output when plugging monitors */
 		arrange(m);
 
+		wlr_scene_node_set_position(&m->fullscreen_bg->node, m->m.x, m->m.y);
+		wlr_scene_rect_set_size(m->fullscreen_bg, m->m.width, m->m.height);
+
 		config_head->state.enabled = 1;
 		config_head->state.mode = m->wlr_output->current_mode;
 		config_head->state.x = m->m.x;
@@ -2654,7 +2679,8 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 	struct wlr_surface *surface = NULL;
 	Client *c = NULL;
 	LayerSurface *l = NULL;
-	int layer;
+	const int *layer;
+	int focus_order[] = { LyrOverlay, LyrTop, LyrFloat, LyrTile, LyrBottom, LyrBg };
 
 	for (layer = NUM_LAYERS - 1; !surface && layer >= 0; layer--) {
 		if (!(node = wlr_scene_node_at(&layers[layer]->node, x, y, nx, ny)))
@@ -2725,13 +2751,8 @@ configurex11(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, configure);
 	struct wlr_xwayland_surface_configure_event *event = data;
-	if (!c->mon)
-		return;
-	if (c->isfloating || c->type == X11Unmanaged)
-		resize(c, (struct wlr_box){.x = event->x, .y = event->y,
-			        .width = event->width, .height = event->height}, 0, 1);
-	else
-		arrange(c->mon);
+	wlr_xwayland_surface_configure(c->surface.xwayland,
+			event->x, event->y, event->width, event->height);
 }
 
 void
