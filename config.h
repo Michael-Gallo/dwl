@@ -1,3 +1,8 @@
+/* Taken from https://github.com/djpohly/dwl/issues/466 */
+#define COLOR(hex)    { ((hex >> 24) & 0xFF) / 255.0f, \
+                        ((hex >> 16) & 0xFF) / 255.0f, \
+                        ((hex >> 8) & 0xFF) / 255.0f, \
+                        (hex & 0xFF) / 255.0f }
 /* appearance */
 static const int sloppyfocus               = 0;  /* focus follows mouse */
 static const int bypass_surface_visibility = 0;  /* 1 means idle inhibitors will disable idle tracking even if it's surface isn't visible  */
@@ -5,12 +10,16 @@ static const int smartborders              = 1;
 static const unsigned int borderpx         = 3;  /* border pixel of windows */
 static const float bordercolor[]           = {0.5, 0.5, 0.5, 1.0};
 static const float focuscolor[]            = {0.08627450980392157, 0.6235294117647059, 0.43529411764705883, 1.0};
+static const float urgentcolor[]           = COLOR(0xff0000ff);
 /* To conform the xdg-protocol, set the alpha to zero to restore the old behavior */
 static const float fullscreen_bg[]         = {0.1, 0.1, 0.1, 1.0};
 
 /* tagging - tagcount must be no greater than 31 */
 #define TAGCOUNT (9)
 static const int tagcount = TAGCOUNT;
+
+/* logging */
+static int log_level = WLR_ERROR;
 
 static const Rule rules[] = {
 	/* app_id     title       tags mask     isfloating   monitor */
@@ -19,6 +28,7 @@ static const Rule rules[] = {
 	*/
 	{ "firefox",  NULL,       1 << 2,       0,           -1 },
 };
+
 
 /* layout(s) */
 static const Layout layouts[] = {
